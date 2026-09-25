@@ -21,8 +21,37 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || "2026";
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 
+// Registered Bot Commands List
+const COMMANDS_LIST = [
+    { name: "!strike-status", dept: "Global Strike Command", desc: "Displays strategic alert readiness state." },
+    { name: "!alert-defcon", dept: "Global Strike Command", desc: "Sets defensive readiness level." },
+    { name: "!sec-patrol", dept: "Air Force Security Forces", desc: "Logs base perimeter security patrol status." },
+    { name: "!base-lockdown", dept: "Air Force Security Forces", desc: "Triggers installation security protocol." },
+    { name: "!clearance-check", dept: "General Command", desc: "Verifies user security clearance status." }
+];
+
 client.once('ready', () => {
     console.log(`System active. Discord gateway connected as ${client.user.tag}`);
+});
+
+// Command Listener
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+
+    const content = message.content.trim();
+
+    if (content === '!strike-status') {
+        await message.reply("🛡️ **[GLOBAL STRIKE COMMAND]** Readiness Status: **DEFCON 3 - STANDBY**");
+    } else if (content.startsWith('!alert-defcon')) {
+        const level = content.split(' ')[1] || '3';
+        await message.reply(`⚠️ **[GLOBAL STRIKE COMMAND]** Alert level updated to **DEFCON ${level}**.`);
+    } else if (content === '!sec-patrol') {
+        await message.reply("👮 **[AIR FORCE SECURITY FORCES]** Perimeter patrol logged. All sectors secure.");
+    } else if (content === '!base-lockdown') {
+        await message.reply("🚨 **[AIR FORCE SECURITY FORCES]** BASE LOCKDOWN PROTOCOL INITIATED.");
+    } else if (content === '!clearance-check') {
+        await message.reply(`🔍 **[SECURITY CLEARANCE]** User ${message.author.username} status: **ACTIVE LEVEL 4 CLEARANCE**.`);
+    }
 });
 
 const requireAuth = (req, res, next) => {
@@ -71,6 +100,62 @@ app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
     }
 });
 
+// Get Messages in Channel
+app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
+    try {
+        const channel = await client.channels.fetch(req.params.channelId);
+        if (!channel) return res.status(404).json({ error: 'CHANNEL NOT FOUND' });
+
+        const fetched = await channel.messages.fetch({ limit: 15 });
+        const messages = fetched.map(m => ({
+            id: m.id,
+            author: m.author.username,
+            isBot: m.author.id === client.user.id,
+            content: m.content,
+            timestamp: m.createdAt
+        }));
+
+        res.json({ messages });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Reply to Message
+app.post('/api/reply-message', requireAuth, async (req, res) => {
+    const { channelId, messageId, replyText } = req.body;
+    try {
+        const channel = await client.channels.fetch(channelId);
+        const targetMessage = await channel.messages.fetch(messageId);
+        await targetMessage.reply(replyText);
+        res.json({ success: true, status: 'REPLY TRANSMITTED' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete Bot Message
+app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) => {
+    try {
+        const channel = await client.channels.fetch(req.params.channelId);
+        const targetMessage = await channel.messages.fetch(req.params.messageId);
+
+        if (targetMessage.author.id !== client.user.id) {
+            return res.status(403).json({ error: 'CAN ONLY DELETE BOT MESSAGES' });
+        }
+
+        await targetMessage.delete();
+        res.json({ success: true, status: 'MESSAGE DELETED' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get Command Registry
+app.get('/api/commands', requireAuth, (req, res) => {
+    res.json({ commands: COMMANDS_LIST });
+});
+
 app.post('/api/send-message', requireAuth, async (req, res) => {
     const { channelId, message } = req.body;
     try {
@@ -92,14 +177,6 @@ app.post('/api/set-status', requireAuth, async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
-});
-
-app.post('/api/shutdown', requireAuth, (req, res) => {
-    res.json({ success: true, message: 'Terminating bot session...' });
-    setTimeout(() => {
-        client.destroy();
-        process.exit(0);
-    }, 1000);
 });
 
 client.login(BOT_TOKEN);
