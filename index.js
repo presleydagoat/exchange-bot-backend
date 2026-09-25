@@ -1,4 +1,4 @@
-onst { Client, GatewayIntentBits, ChannelType, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, PermissionsBitField } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -14,7 +14,7 @@ const intents = [
     GatewayIntentBits.GuildMembers
 ];
 
-// Initialize Independent Client Instances
+// Completely Isolated Bot Clients
 const clients = {
     exchange: new Client({ intents }),
     gsc: new Client({ intents }),
@@ -30,27 +30,41 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || "2026";
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 
-// Administrative Command Registry
+// Expanded Administrative & Moderation Command Suite
 const ADMINISTRATIVE_COMMANDS = [
-    { name: "!purge [amount]", dept: "Admin Operations", desc: "Deletes a designated batch of messages from channel history." },
-    { name: "!kick [user] [reason]", dept: "Admin Operations", desc: "Removes specified member from the server." },
-    { name: "!ban [user] [reason]", dept: "Admin Operations", desc: "Permanently bans specified member from the server." },
-    { name: "!mute [user] [duration]", dept: "Admin Operations", desc: "Restricts member communication permissions." },
-    { name: "!unmute [user]", dept: "Admin Operations", desc: "Restores member communication privileges." },
-    { name: "!warn [user] [reason]", dept: "Security Operations", desc: "Issues formal administrative warning to a user." },
-    { name: "!lockdown [channel/all]", dept: "Security Operations", desc: "Locks channel send privileges for standard users." },
-    { name: "!unlock [channel/all]", dept: "Security Operations", desc: "Restores standard send privileges in locked channels." },
-    { name: "!role add [user] [role]", dept: "Personnel Control", desc: "Assigns designated role permissions to target user." },
-    { name: "!role remove [user] [role]", dept: "Personnel Control", desc: "Revokes designated role permissions from target user." },
-    { name: "!slowmode [seconds]", dept: "Channel Operations", desc: "Sets message rate-limiting interval for active channel." },
-    { name: "!nick [user] [nickname]", dept: "Personnel Control", desc: "Modifies display identity for specified member." }
+    { name: "!purge [amount]", dept: "Moderation", desc: "Bulk deletes up to 100 messages in the current channel." },
+    { name: "!kick [user] [reason]", dept: "Moderation", desc: "Kicks a member from the server." },
+    { name: "!ban [user] [reason]", dept: "Moderation", desc: "Bans a member from the server." },
+    { name: "!unban [userId]", dept: "Moderation", desc: "Revokes a user ban by ID." },
+    { name: "!mute [user] [time] [reason]", dept: "Moderation", desc: "Timeouts/mutes a member." },
+    { name: "!unmute [user]", dept: "Moderation", desc: "Removes a timeout from a member." },
+    { name: "!warn [user] [reason]", dept: "Security", desc: "Issues a logged warning to a target user." },
+    { name: "!warnings [user]", dept: "Security", desc: "Displays warning history for a user." },
+    { name: "!clearwarns [user]", dept: "Security", desc: "Clears all warnings assigned to a user." },
+    { name: "!lockdown [channel]", dept: "Security", desc: "Locks send permissions for normal members." },
+    { name: "!unlock [channel]", dept: "Security", desc: "Restores send permissions for normal members." },
+    { name: "!role add [user] [role]", dept: "Role Mgmt", desc: "Assigns a specific role to a user." },
+    { name: "!role remove [user] [role]", dept: "Role Mgmt", desc: "Removes a specific role from a user." },
+    { name: "!slowmode [seconds]", dept: "Channel Ops", desc: "Sets channel slowmode delay (0 to disable)." },
+    { name: "!nick [user] [nickname]", dept: "User Control", desc: "Changes a member's server display name." },
+    { name: "!announcement [text]", dept: "Utility", desc: "Posts an official formatted server announcement." },
+    { name: "!embed [title] | [text]", dept: "Utility", desc: "Sends a rich embedded message." },
+    { name: "!userinfo [user]", dept: "Information", desc: "Fetches account details, roles, and join date." },
+    { name: "!serverinfo", dept: "Information", desc: "Displays server statistics, owner, and member counts." },
+    { name: "!botstatus", dept: "System", desc: "Outputs bot uptime, latency, and memory usage." },
+    { name: "!nuke", dept: "Admin Ops", desc: "Clones and deletes channel to clear all message history." },
+    { name: "!pin [messageId]", dept: "Channel Ops", desc: "Pins a target message in the current channel." },
+    { name: "!unpin [messageId]", dept: "Channel Ops", desc: "Unpins a target message from the channel." },
+    { name: "!dm [user] [message]", dept: "Admin Ops", desc: "Sends a direct message to a user via bot." },
+    { name: "!say [message]", dept: "Admin Ops", desc: "Forces bot to repeat message directly in channel." }
 ];
 
-// Start Handlers
-clients.exchange.once('ready', () => console.log(`[EXCHANGE BOT] Active: ${clients.exchange.user.tag}`));
-clients.gsc.once('ready', () => console.log(`[GSC BOT] Active: ${clients.gsc.user.tag}`));
-clients.afsf.once('ready', () => console.log(`[AFSF BOT] Active: ${clients.afsf.user.tag}`));
+// Startup Logs
+clients.exchange.once('ready', () => console.log(`[EXCHANGE BOT] Connected: ${clients.exchange.user.tag}`));
+clients.gsc.once('ready', () => console.log(`[GSC BOT] Connected: ${clients.gsc.user.tag}`));
+clients.afsf.once('ready', () => console.log(`[AFSF BOT] Connected: ${clients.afsf.user.tag}`));
 
+// Auth Middleware
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (authHeader === `Bearer ${SESSION_TOKEN}`) {
@@ -69,13 +83,20 @@ app.post('/api/login', (req, res) => {
     }
 });
 
-// Fetch Servers Associated with Chosen Unit
+// Helper Function: Validate and Get Selected Client
+function getSelectedClient(botType) {
+    const client = clients[botType || 'exchange'];
+    if (!client || !client.isReady()) return null;
+    return client;
+}
+
+// Get Servers FOR THE SPECIFIC SELECTED BOT ONLY
 app.get('/api/servers', requireAuth, (req, res) => {
     const botType = req.query.bot || 'exchange';
-    const activeClient = clients[botType];
+    const activeClient = getSelectedClient(botType);
 
-    if (!activeClient || !activeClient.isReady()) {
-        return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline or Unreachable.` });
+    if (!activeClient) {
+        return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] is offline or bot token is missing.` });
     }
 
     try {
@@ -90,14 +111,16 @@ app.get('/api/servers', requireAuth, (req, res) => {
     }
 });
 
-// Fetch Channels for Specific Server and Unit
+// Get Channels FOR THE SPECIFIC SELECTED BOT ONLY
 app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
-    const activeClient = clients[botType];
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline.` });
 
     try {
         const guild = await activeClient.guilds.fetch(req.params.guildId);
-        if (!guild) return res.status(404).json({ error: 'SERVER ACCESS DENIED' });
+        if (!guild) return res.status(404).json({ error: 'SERVER ACCESS DENIED FOR THIS BOT' });
 
         const channels = guild.channels.cache
             .filter(c => c.type === ChannelType.GuildText)
@@ -109,10 +132,12 @@ app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
     }
 });
 
-// Deep History Channel Message Fetching
+// Fetch History FOR THE SPECIFIC SELECTED BOT
 app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
-    const activeClient = clients[botType];
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline.` });
 
     try {
         const channel = await activeClient.channels.fetch(req.params.channelId);
@@ -134,10 +159,12 @@ app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
     }
 });
 
-// Transmit New Message
+// Send Message FROM THE SPECIFIC SELECTED BOT
 app.post('/api/send-message', requireAuth, async (req, res) => {
     const { channelId, message, botType } = req.body;
-    const activeClient = clients[botType || 'exchange'];
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline.` });
 
     try {
         const channel = await activeClient.channels.fetch(channelId);
@@ -150,10 +177,12 @@ app.post('/api/send-message', requireAuth, async (req, res) => {
     }
 });
 
-// Forward Message
+// Forward Message FROM THE SPECIFIC SELECTED BOT
 app.post('/api/forward-message', requireAuth, async (req, res) => {
     const { targetChannelId, content, botType } = req.body;
-    const activeClient = clients[botType || 'exchange'];
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline.` });
 
     try {
         const channel = await activeClient.channels.fetch(targetChannelId);
@@ -166,10 +195,12 @@ app.post('/api/forward-message', requireAuth, async (req, res) => {
     }
 });
 
-// Universal Delete (Any User or Bot Message)
+// Delete ANY Message using the Selected Bot's Permissions
 app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
-    const activeClient = clients[botType];
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline.` });
 
     try {
         const channel = await activeClient.channels.fetch(req.params.channelId);
@@ -182,29 +213,29 @@ app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) 
     }
 });
 
-// Get Administrative Command Registry
+// Get Commands List
 app.get('/api/commands', requireAuth, (req, res) => {
     res.json({ commands: ADMINISTRATIVE_COMMANDS });
 });
 
-// Isolated Status Changer per Bot
+// Change Presence FOR THE SPECIFIC SELECTED BOT ONLY
 app.post('/api/set-status', requireAuth, async (req, res) => {
     const { status, botType } = req.body;
-    const activeClient = clients[botType];
+    const activeClient = getSelectedClient(botType);
 
-    if (!activeClient || !activeClient.isReady()) {
+    if (!activeClient) {
         return res.status(400).json({ error: `Unit [${botType}] Unavailable.` });
     }
 
     try {
         activeClient.user.setPresence({ status });
-        res.json({ success: true, status: `[${botType.toUpperCase()}] presence set to ${status}` });
+        res.json({ success: true, status: `[${botType.toUpperCase()}] status updated to ${status}` });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Independent Token Authentications
+// Login Each Bot Independently
 if (BOT_TOKEN) clients.exchange.login(BOT_TOKEN);
 if (GSC_BOT_TOKEN) clients.gsc.login(GSC_BOT_TOKEN);
 if (AFSF_BOT_TOKEN) clients.afsf.login(AFSF_BOT_TOKEN);
