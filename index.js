@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
+onst { Client, GatewayIntentBits, ChannelType, PermissionsBitField } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -7,17 +7,19 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Required Intents
 const intents = [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
 ];
 
-// Initialize Multi-Bot Clients
-const mainClient = new Client({ intents });
-const gscClient = new Client({ intents });
-const afsfClient = new Client({ intents });
+// Initialize Independent Client Instances
+const clients = {
+    exchange: new Client({ intents }),
+    gsc: new Client({ intents }),
+    afsf: new Client({ intents })
+};
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GSC_BOT_TOKEN = process.env.GSC_BOT_TOKEN;
@@ -28,50 +30,27 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || "2026";
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 
-// Unified Command List
-const COMMANDS_LIST = [
-    { name: "!strike-status", dept: "Global Strike Command", desc: "Displays strategic alert readiness state." },
-    { name: "!alert-defcon", dept: "Global Strike Command", desc: "Sets defensive readiness level." },
-    { name: "!sec-patrol", dept: "Air Force Security Forces", desc: "Logs base perimeter security patrol status." },
-    { name: "!base-lockdown", dept: "Air Force Security Forces", desc: "Triggers installation security protocol." },
-    { name: "!clearance-check", dept: "General Command", desc: "Verifies user security clearance status." }
+// Administrative Command Registry
+const ADMINISTRATIVE_COMMANDS = [
+    { name: "!purge [amount]", dept: "Admin Operations", desc: "Deletes a designated batch of messages from channel history." },
+    { name: "!kick [user] [reason]", dept: "Admin Operations", desc: "Removes specified member from the server." },
+    { name: "!ban [user] [reason]", dept: "Admin Operations", desc: "Permanently bans specified member from the server." },
+    { name: "!mute [user] [duration]", dept: "Admin Operations", desc: "Restricts member communication permissions." },
+    { name: "!unmute [user]", dept: "Admin Operations", desc: "Restores member communication privileges." },
+    { name: "!warn [user] [reason]", dept: "Security Operations", desc: "Issues formal administrative warning to a user." },
+    { name: "!lockdown [channel/all]", dept: "Security Operations", desc: "Locks channel send privileges for standard users." },
+    { name: "!unlock [channel/all]", dept: "Security Operations", desc: "Restores standard send privileges in locked channels." },
+    { name: "!role add [user] [role]", dept: "Personnel Control", desc: "Assigns designated role permissions to target user." },
+    { name: "!role remove [user] [role]", dept: "Personnel Control", desc: "Revokes designated role permissions from target user." },
+    { name: "!slowmode [seconds]", dept: "Channel Operations", desc: "Sets message rate-limiting interval for active channel." },
+    { name: "!nick [user] [nickname]", dept: "Personnel Control", desc: "Modifies display identity for specified member." }
 ];
 
-// Main Bot Listeners
-mainClient.once('ready', () => console.log(`[MAIN BOT] Operational: ${mainClient.user.tag}`));
-mainClient.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (message.content === '!clearance-check') {
-        await message.reply(`🔍 **[SECURITY CLEARANCE]** User ${message.author.username} status: **ACTIVE LEVEL 4 CLEARANCE**.`);
-    }
-});
+// Start Handlers
+clients.exchange.once('ready', () => console.log(`[EXCHANGE BOT] Active: ${clients.exchange.user.tag}`));
+clients.gsc.once('ready', () => console.log(`[GSC BOT] Active: ${clients.gsc.user.tag}`));
+clients.afsf.once('ready', () => console.log(`[AFSF BOT] Active: ${clients.afsf.user.tag}`));
 
-// GSC Bot Listeners
-gscClient.once('ready', () => console.log(`[GSC BOT] Operational: ${gscClient.user.tag}`));
-gscClient.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    const content = message.content.trim();
-    if (content === '!strike-status') {
-        await message.reply("🛡️ **[GLOBAL STRIKE COMMAND]** Readiness Status: **DEFCON 3 - STANDBY**");
-    } else if (content.startsWith('!alert-defcon')) {
-        const level = content.split(' ')[1] || '3';
-        await message.reply(`⚠️ **[GLOBAL STRIKE COMMAND]** Alert level updated to **DEFCON ${level}**.`);
-    }
-});
-
-// AFSF Bot Listeners
-afsfClient.once('ready', () => console.log(`[AFSF BOT] Operational: ${afsfClient.user.tag}`));
-afsfClient.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    const content = message.content.trim();
-    if (content === '!sec-patrol') {
-        await message.reply("👮 **[AIR FORCE SECURITY FORCES]** Perimeter patrol logged. All sectors secure.");
-    } else if (content === '!base-lockdown') {
-        await message.reply("🚨 **[AIR FORCE SECURITY FORCES]** BASE LOCKDOWN PROTOCOL INITIATED.");
-    }
-});
-
-// Authentication Middleware
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (authHeader === `Bearer ${SESSION_TOKEN}`) {
@@ -90,9 +69,17 @@ app.post('/api/login', (req, res) => {
     }
 });
 
+// Fetch Servers Associated with Chosen Unit
 app.get('/api/servers', requireAuth, (req, res) => {
+    const botType = req.query.bot || 'exchange';
+    const activeClient = clients[botType];
+
+    if (!activeClient || !activeClient.isReady()) {
+        return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] Offline or Unreachable.` });
+    }
+
     try {
-        const guilds = mainClient.guilds.cache.map(g => ({
+        const guilds = activeClient.guilds.cache.map(g => ({
             id: g.id,
             name: g.name,
             icon: g.iconURL() || 'https://cdn.discordapp.com/embed/avatars/0.png'
@@ -103,9 +90,13 @@ app.get('/api/servers', requireAuth, (req, res) => {
     }
 });
 
+// Fetch Channels for Specific Server and Unit
 app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
+    const botType = req.query.bot || 'exchange';
+    const activeClient = clients[botType];
+
     try {
-        const guild = await mainClient.guilds.fetch(req.params.guildId);
+        const guild = await activeClient.guilds.fetch(req.params.guildId);
         if (!guild) return res.status(404).json({ error: 'SERVER ACCESS DENIED' });
 
         const channels = guild.channels.cache
@@ -118,18 +109,21 @@ app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
     }
 });
 
+// Deep History Channel Message Fetching
 app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
+    const botType = req.query.bot || 'exchange';
+    const activeClient = clients[botType];
+
     try {
-        const channel = await mainClient.channels.fetch(req.params.channelId);
+        const channel = await activeClient.channels.fetch(req.params.channelId);
         if (!channel) return res.status(404).json({ error: 'CHANNEL NOT FOUND' });
 
-        const fetched = await channel.messages.fetch({ limit: 15 });
-        const botIds = [mainClient.user?.id, gscClient.user?.id, afsfClient.user?.id];
-
+        const fetched = await channel.messages.fetch({ limit: 100 });
         const messages = fetched.map(m => ({
             id: m.id,
             author: m.author.username,
-            isBot: botIds.includes(m.author.id),
+            authorId: m.author.id,
+            isBot: m.author.bot,
             content: m.content,
             timestamp: m.createdAt
         }));
@@ -140,16 +134,15 @@ app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
     }
 });
 
+// Transmit New Message
 app.post('/api/send-message', requireAuth, async (req, res) => {
-    const { channelId, message, senderBot } = req.body;
-    try {
-        let activeClient = mainClient;
-        if (senderBot === 'gsc' && gscClient.isReady()) activeClient = gscClient;
-        if (senderBot === 'afsf' && afsfClient.isReady()) activeClient = afsfClient;
+    const { channelId, message, botType } = req.body;
+    const activeClient = clients[botType || 'exchange'];
 
+    try {
         const channel = await activeClient.channels.fetch(channelId);
         if (!channel) return res.status(404).json({ error: 'TARGET_CHANNEL_NOT_FOUND' });
-        
+
         await channel.send(message);
         res.json({ success: true, status: 'MESSAGE TRANSMITTED' });
     } catch (err) {
@@ -157,43 +150,64 @@ app.post('/api/send-message', requireAuth, async (req, res) => {
     }
 });
 
-app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) => {
-    try {
-        const channel = await mainClient.channels.fetch(req.params.channelId);
-        const targetMessage = await channel.messages.fetch(req.params.messageId);
-        const botIds = [mainClient.user?.id, gscClient.user?.id, afsfClient.user?.id];
+// Forward Message
+app.post('/api/forward-message', requireAuth, async (req, res) => {
+    const { targetChannelId, content, botType } = req.body;
+    const activeClient = clients[botType || 'exchange'];
 
-        if (!botIds.includes(targetMessage.author.id)) {
-            return res.status(403).json({ error: 'CAN ONLY DELETE BOT MESSAGES' });
-        }
+    try {
+        const channel = await activeClient.channels.fetch(targetChannelId);
+        if (!channel) return res.status(404).json({ error: 'FORWARD_TARGET_NOT_FOUND' });
+
+        await channel.send(`⏩ **[FORWARDED TRANSMISSION]**\n${content}`);
+        res.json({ success: true, status: 'TRANSMISSION FORWARDED' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Universal Delete (Any User or Bot Message)
+app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) => {
+    const botType = req.query.bot || 'exchange';
+    const activeClient = clients[botType];
+
+    try {
+        const channel = await activeClient.channels.fetch(req.params.channelId);
+        const targetMessage = await channel.messages.fetch(req.params.messageId);
 
         await targetMessage.delete();
-        res.json({ success: true, status: 'MESSAGE DELETED' });
+        res.json({ success: true, status: 'MESSAGE PURGED' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: 'PERMISSIONS INSUFFICIENT OR MESSAGE NOT FOUND: ' + err.message });
     }
 });
 
+// Get Administrative Command Registry
 app.get('/api/commands', requireAuth, (req, res) => {
-    res.json({ commands: COMMANDS_LIST });
+    res.json({ commands: ADMINISTRATIVE_COMMANDS });
 });
 
+// Isolated Status Changer per Bot
 app.post('/api/set-status', requireAuth, async (req, res) => {
-    const { status } = req.body;
+    const { status, botType } = req.body;
+    const activeClient = clients[botType];
+
+    if (!activeClient || !activeClient.isReady()) {
+        return res.status(400).json({ error: `Unit [${botType}] Unavailable.` });
+    }
+
     try {
-        if (mainClient.isReady()) mainClient.user.setPresence({ status });
-        if (gscClient.isReady()) gscClient.user.setPresence({ status });
-        if (afsfClient.isReady()) afsfClient.user.setPresence({ status });
-        res.json({ success: true, status: `All bots updated to ${status}` });
+        activeClient.user.setPresence({ status });
+        res.json({ success: true, status: `[${botType.toUpperCase()}] presence set to ${status}` });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Login All Bots
-if (BOT_TOKEN) mainClient.login(BOT_TOKEN);
-if (GSC_BOT_TOKEN) gscClient.login(GSC_BOT_TOKEN);
-if (AFSF_BOT_TOKEN) afsfClient.login(AFSF_BOT_TOKEN);
+// Independent Token Authentications
+if (BOT_TOKEN) clients.exchange.login(BOT_TOKEN);
+if (GSC_BOT_TOKEN) clients.gsc.login(GSC_BOT_TOKEN);
+if (AFSF_BOT_TOKEN) clients.afsf.login(AFSF_BOT_TOKEN);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend server active on port ${PORT}`));
