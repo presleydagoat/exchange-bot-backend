@@ -1,10 +1,10 @@
-const { Client, GatewayIntentBits, ChannelType, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, ActivityType, Partials } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 
 const app = express();
-app.use(express.json({ limit: '10mb' })); // Support base64 avatar uploads
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
 const intents = [
@@ -15,11 +15,14 @@ const intents = [
     GatewayIntentBits.DirectMessages
 ];
 
-// Completely Isolated Bot Clients
+// Partials allow the bot to receive DM events even if uncached
+const partials = [Partials.Channel, Partials.Message, Partials.User];
+
+// Isolated Bot Clients
 const clients = {
-    exchange: new Client({ intents }),
-    gsc: new Client({ intents }),
-    afsf: new Client({ intents })
+    exchange: new Client({ intents, partials }),
+    gsc: new Client({ intents, partials }),
+    afsf: new Client({ intents, partials })
 };
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -31,14 +34,14 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || "2026";
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 
-// Store DM logs in memory per bot
+// In-memory fallback logs for real-time incoming DMs
 const dmLogs = {
     exchange: [],
     gsc: [],
     afsf: []
 };
 
-// Activity Type Mapping
+// Discord Activity Mapping
 const ACTIVITY_TYPES = {
     PLAYING: ActivityType.Playing,
     STREAMING: ActivityType.Streaming,
@@ -48,10 +51,10 @@ const ACTIVITY_TYPES = {
     CUSTOM: ActivityType.Custom
 };
 
-// Setup DM listeners for each bot
+// Real-time DM Event Listener for each bot
 Object.keys(clients).forEach(key => {
     const client = clients[key];
-    client.on('messageCreate', message => {
+    client.on('messageCreate', async message => {
         if (message.channel.type === ChannelType.DM) {
             dmLogs[key].push({
                 id: message.id,
@@ -61,18 +64,17 @@ Object.keys(clients).forEach(key => {
                 content: message.content,
                 timestamp: message.createdAt,
                 isBot: message.author.bot,
-                channelId: message.channel.id
+                channelId: message.author.id
             });
         }
     });
 });
 
-// Startup Logs
 clients.exchange.once('ready', () => console.log(`[EXCHANGE BOT] Connected: ${clients.exchange.user.tag}`));
 clients.gsc.once('ready', () => console.log(`[GSC BOT] Connected: ${clients.gsc.user.tag}`));
 clients.afsf.once('ready', () => console.log(`[AFSF BOT] Connected: ${clients.afsf.user.tag}`));
 
-// Auth Middleware
+// Authentication Middleware
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     if (authHeader === `Bearer ${SESSION_TOKEN}`) {
@@ -105,17 +107,14 @@ app.post('/api/customize', requireAuth, async (req, res) => {
     if (!activeClient) return res.status(503).json({ error: `Unit [${botType}] Offline.` });
 
     try {
-        // Change Profile Picture (Base64 or URL)
         if (avatar) {
             await activeClient.user.setAvatar(avatar);
         }
 
-        // Change Bio / About Me
-        if (bio !== undefined) {
+        if (bio !== undefined && activeClient.user.setAboutMe) {
             await activeClient.user.setAboutMe(bio);
         }
 
-        // Set Rich Presence / Activity & Status
         const options = {};
         if (status) options.status = status;
         if (activityType && activityText) {
@@ -133,7 +132,7 @@ app.post('/api/customize', requireAuth, async (req, res) => {
     }
 });
 
-// Fetch Bot Details (Avatar, Username, Bio)
+// Fetch Current Bot Profile Details
 app.get('/api/bot-profile', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
     const activeClient = getSelectedClient(botType);
@@ -148,13 +147,59 @@ app.get('/api/bot-profile', requireAuth, async (req, res) => {
     });
 });
 
-// Fetch Direct Message Conversations
-app.get('/api/dms', requireAuth, (req, res) => {
+// Fetch Direct Messages Directly From Discord APIs + Memory
+app.get('/api/dms', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
-    res.json({ dms: dmLogs[botType] || [] });
+    const activeClient = getSelectedClient(botType);
+
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType}] Offline.` });
+
+    try {
+        const fetchedDms = [];
+        const processedMsgIds = new Set();
+
+        // Query active cached users and create/fetch DM channels
+        for (const [userId, user] of activeClient.users.cache) {
+            if (user.bot) continue;
+
+            try {
+                const dmChannel = user.dmChannel || await user.createDM();
+                const messages = await dmChannel.messages.fetch({ limit: 50 });
+
+                messages.forEach(msg => {
+                    processedMsgIds.add(msg.id);
+                    fetchedDms.push({
+                        id: msg.id,
+                        author: msg.author.username,
+                        authorId: msg.author.id,
+                        avatar: msg.author.displayAvatarURL(),
+                        content: msg.content,
+                        timestamp: msg.createdAt,
+                        isBot: msg.author.bot,
+                        channelId: userId
+                    });
+                });
+            } catch (err) {
+                // User has DMs disabled or unreachable
+                continue;
+            }
+        }
+
+        // Include any memory-logged DMs not captured in API loop
+        (dmLogs[botType] || []).forEach(msg => {
+            if (!processedMsgIds.has(msg.id)) {
+                fetchedDms.push(msg);
+            }
+        });
+
+        fetchedDms.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        res.json({ dms: fetchedDms });
+    } catch (err) {
+        res.status(500).json({ error: 'FAILED TO FETCH DMS: ' + err.message });
+    }
 });
 
-// Send Direct Message
+// Send Direct Message to User
 app.post('/api/send-dm', requireAuth, async (req, res) => {
     const { botType, userId, message } = req.body;
     const activeClient = getSelectedClient(botType);
@@ -165,7 +210,6 @@ app.post('/api/send-dm', requireAuth, async (req, res) => {
         const user = await activeClient.users.fetch(userId);
         const sentMsg = await user.send(message);
 
-        // Record outgoing DM
         dmLogs[botType].push({
             id: sentMsg.id,
             author: activeClient.user.username,
@@ -174,7 +218,7 @@ app.post('/api/send-dm', requireAuth, async (req, res) => {
             content: message,
             timestamp: sentMsg.createdAt,
             isBot: true,
-            channelId: user.dmChannel ? user.dmChannel.id : userId
+            channelId: userId
         });
 
         res.json({ success: true, status: 'DIRECT TRANSMISSION SENT' });
@@ -225,7 +269,7 @@ app.get('/api/servers/:guildId/channels', requireAuth, async (req, res) => {
     }
 });
 
-// Fetch History
+// Fetch Channel History
 app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
     const activeClient = getSelectedClient(botType);
@@ -339,7 +383,7 @@ app.get('/api/commands', requireAuth, (req, res) => {
     });
 });
 
-// Set Status
+// Quick Presence Status Endpoint
 app.post('/api/set-status', requireAuth, async (req, res) => {
     const { status, botType } = req.body;
     const activeClient = getSelectedClient(botType);
@@ -354,10 +398,9 @@ app.post('/api/set-status', requireAuth, async (req, res) => {
     }
 });
 
-// Login Bots
 if (BOT_TOKEN) clients.exchange.login(BOT_TOKEN);
 if (GSC_BOT_TOKEN) clients.gsc.login(GSC_BOT_TOKEN);
 if (AFSF_BOT_TOKEN) clients.afsf.login(AFSF_BOT_TOKEN);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Backend server active on port ${PORT}`));
+app.listen(PORT, () => console.log(`Backend active on port ${PORT}`));
