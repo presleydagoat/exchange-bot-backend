@@ -102,7 +102,7 @@ app.post('/api/shutdown', requireAuth, (req, res) => {
     }, 1000);
 });
 
-client.login(MTUzNDQwNDM4MzYxNjUzMjYyMg.Gl91Hp.lKS0SLUnlv62sA4AJJE2ICEyRIpv0CPs2hCats);
+client.login(MTUzNDQwNDM4MzYxNjUzMjYyMg.GDPcSx.whuIwD7Baejy8FX2OKwoFjj1ShydRku4TGOF3I);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend server active on port ${PORT}`));
