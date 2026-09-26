@@ -2,10 +2,14 @@ const { Client, GatewayIntentBits, ChannelType, ActivityType, Partials } = requi
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const path = require('path');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
+
+// Serve static assets from current directory
+app.use(express.static(__dirname));
 
 const intents = [
     GatewayIntentBits.Guilds,
@@ -15,7 +19,6 @@ const intents = [
     GatewayIntentBits.DirectMessages
 ];
 
-// Partials allow the bot to receive DM events even if uncached
 const partials = [Partials.Channel, Partials.Message, Partials.User];
 
 // Isolated Bot Clients
@@ -34,14 +37,12 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || "2026";
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 
-// In-memory fallback logs for real-time incoming DMs
 const dmLogs = {
     exchange: [],
     gsc: [],
     afsf: []
 };
 
-// Discord Activity Mapping
 const ACTIVITY_TYPES = {
     PLAYING: ActivityType.Playing,
     STREAMING: ActivityType.Streaming,
@@ -51,7 +52,7 @@ const ACTIVITY_TYPES = {
     CUSTOM: ActivityType.Custom
 };
 
-// Real-time DM Event Listener for each bot
+// Real-time DM listener
 Object.keys(clients).forEach(key => {
     const client = clients[key];
     client.on('messageCreate', async message => {
@@ -74,6 +75,11 @@ clients.exchange.once('ready', () => console.log(`[EXCHANGE BOT] Connected: ${cl
 clients.gsc.once('ready', () => console.log(`[GSC BOT] Connected: ${clients.gsc.user.tag}`));
 clients.afsf.once('ready', () => console.log(`[AFSF BOT] Connected: ${clients.afsf.user.tag}`));
 
+// Serve Dashboard HTML
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // Authentication Middleware
 const requireAuth = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -84,6 +90,7 @@ const requireAuth = (req, res, next) => {
     }
 };
 
+// Login API
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
     if (username === DASHBOARD_USER && password === DASHBOARD_PASS) {
@@ -99,7 +106,7 @@ function getSelectedClient(botType) {
     return client;
 }
 
-// Bot Profile & Customization Endpoint
+// Bot Profile & Presence Update
 app.post('/api/customize', requireAuth, async (req, res) => {
     const { botType, avatar, bio, activityType, activityText, status } = req.body;
     const activeClient = getSelectedClient(botType);
@@ -107,13 +114,8 @@ app.post('/api/customize', requireAuth, async (req, res) => {
     if (!activeClient) return res.status(503).json({ error: `Unit [${botType}] Offline.` });
 
     try {
-        if (avatar) {
-            await activeClient.user.setAvatar(avatar);
-        }
-
-        if (bio !== undefined && activeClient.user.setAboutMe) {
-            await activeClient.user.setAboutMe(bio);
-        }
+        if (avatar) await activeClient.user.setAvatar(avatar);
+        if (bio !== undefined && activeClient.user.setAboutMe) await activeClient.user.setAboutMe(bio);
 
         const options = {};
         if (status) options.status = status;
@@ -125,14 +127,13 @@ app.post('/api/customize', requireAuth, async (req, res) => {
         }
 
         activeClient.user.setPresence(options);
-
         res.json({ success: true, message: 'BOT PROFILE & PRESENCE UPDATED SUCCESSFULLY' });
     } catch (err) {
         res.status(500).json({ error: 'FAILED TO UPDATE PROFILE: ' + err.message });
     }
 });
 
-// Fetch Current Bot Profile Details
+// Fetch Bot Identity Details
 app.get('/api/bot-profile', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
     const activeClient = getSelectedClient(botType);
@@ -147,7 +148,7 @@ app.get('/api/bot-profile', requireAuth, async (req, res) => {
     });
 });
 
-// Fetch Direct Messages Directly From Discord APIs + Memory
+// Fetch DM Conversations Direct From API
 app.get('/api/dms', requireAuth, async (req, res) => {
     const botType = req.query.bot || 'exchange';
     const activeClient = getSelectedClient(botType);
@@ -158,7 +159,6 @@ app.get('/api/dms', requireAuth, async (req, res) => {
         const fetchedDms = [];
         const processedMsgIds = new Set();
 
-        // Query active cached users and create/fetch DM channels
         for (const [userId, user] of activeClient.users.cache) {
             if (user.bot) continue;
 
@@ -180,12 +180,10 @@ app.get('/api/dms', requireAuth, async (req, res) => {
                     });
                 });
             } catch (err) {
-                // User has DMs disabled or unreachable
                 continue;
             }
         }
 
-        // Include any memory-logged DMs not captured in API loop
         (dmLogs[botType] || []).forEach(msg => {
             if (!processedMsgIds.has(msg.id)) {
                 fetchedDms.push(msg);
@@ -199,7 +197,7 @@ app.get('/api/dms', requireAuth, async (req, res) => {
     }
 });
 
-// Send Direct Message to User
+// Send DM
 app.post('/api/send-dm', requireAuth, async (req, res) => {
     const { botType, userId, message } = req.body;
     const activeClient = getSelectedClient(botType);
@@ -232,9 +230,7 @@ app.get('/api/servers', requireAuth, (req, res) => {
     const botType = req.query.bot || 'exchange';
     const activeClient = getSelectedClient(botType);
 
-    if (!activeClient) {
-        return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] is offline.` });
-    }
+    if (!activeClient) return res.status(503).json({ error: `Unit [${botType.toUpperCase()}] is offline.` });
 
     try {
         const guilds = activeClient.guilds.cache.map(g => ({
@@ -350,7 +346,7 @@ app.delete('/api/messages/:channelId/:messageId', requireAuth, async (req, res) 
     }
 });
 
-// Commands Endpoint
+// Admin Commands
 app.get('/api/commands', requireAuth, (req, res) => {
     res.json({
         commands: [
@@ -383,7 +379,7 @@ app.get('/api/commands', requireAuth, (req, res) => {
     });
 });
 
-// Quick Presence Status Endpoint
+// Set Status
 app.post('/api/set-status', requireAuth, async (req, res) => {
     const { status, botType } = req.body;
     const activeClient = getSelectedClient(botType);
